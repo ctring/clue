@@ -125,7 +125,7 @@ export class DjangoAnalyzer implements Analyzer {
                     const messagesFilePath = vscode.Uri.file(tmpFile.name);
                     const content = await vscode.workspace.fs.readFile(messagesFilePath);
                     const output = JSON.parse(content.toString());
-                    this.collectEntities(output.messages);
+                    // this.collectEntities(output.messages);
                     this.collectOperations(output.messages);
                     resolve(true);
                 } else {
@@ -217,140 +217,167 @@ export class DjangoAnalyzer implements Analyzer {
                     isCustom: false,
                 };
 
-                // Find a recognized entity
-                let found = false;
-                for (const calleeType of content.objectTypes) {
-                    if (calleeType === "django.db.transaction.atomic") {
-                        entities.get("[django.db.transaction.atomic]")!.operations.push(operation);
-                        found = true;
-                        break;
-                    }
-
-                    // Parse the entity name in the pattern "django.db.models.manager.Manager[ModelName]"
-                    {
-                        const entityName = calleeType.match(/django.db.models.manager.Manager\[(.*)\]/)?.[1];
-                        if (entityName !== undefined && entities.has(entityName)) {
-                            const entity = entities.get(entityName)!;
-                            entity.operations.push(operation);
-                            found = true;
-                            break;
-                        }
-                    }
-
-                    // Parse the entity name in the pattern "django.db.models.manager.BaseManager[ModelName]"
-                    {
-                        const entityName = calleeType.match(/django.db.models.manager.BaseManager\[(.*)\]/)?.[1];
-                        if (entityName !== undefined && entities.has(entityName)) {
-                            const entity = entities.get(entityName)!;
-                            entity.operations.push(operation);
-                            found = true;
-                            break;
-                        }
-                    }
-
-                    // Parse the entity names in the pattern "django.db.models.query._QuerySet[ModelName, ...]"
-                    {
-                        const entityNamesStr = calleeType.match(/django.db.models.query._QuerySet\[(.*)\]/)?.[1];
-                        const entityNames = entityNamesStr === undefined ? [] : entityNamesStr.split(", ");
-                        for (const entityName of entityNames) {
-                            const entity = entities.get(entityName);
-                            if (entity !== undefined) {
-                                entity.operations.push(operation);
-                                found = true;
-                                break;
+                for (const ent of entities.values()) {
+                    for (const op of ent.operations) {
+                        const sameOperation = operation.selection.filePath === op.selection?.filePath
+                            && operation.selection.fromLine === op.selection?.fromLine
+                            && operation.selection.toLine === op.selection?.toLine
+                            && operation.selection.fromColumn === op.selection?.fromColumn
+                            && operation.selection.toColumn === op.selection?.toColumn;
+                        if (sameOperation && operation.arguments.length > 0) {
+                            if (op.arguments.length !== operation.arguments.length) {
+                                console.log(`Update arguments for recognized ${op.name} on ${operation.selection.filePath}:${operation.selection.fromLine}`);
                             }
-                        }
-                        if (found) {
-                            break;
-                        }
-                    }
-
-                    // Match with the unique base name of the entity
-                    {
-                        const baseEntityName = calleeType.match(/(\w+)Manager$/)?.[1];
-                        if (baseEntityName !== undefined && baseEntityNames.has(baseEntityName)) {
-                            const entityName = baseEntityNames.get(baseEntityName);
-                            if (entityName !== null && entityName !== undefined) {
-                                const entity = entities.get(entityName)!;
-                                entity.operations.push(operation);
-                                found = true;
-                                break;
-                            }
-                        }
-
-                        if (["django.db.models.query._QuerySet[Any, Any]", "django.db.models.manager.Manager[Any]"].includes(calleeType)) {
-                            let baseEntityName = content.object;
-                            let firstDot = baseEntityName.indexOf(".");
-                            if (firstDot !== -1) {
-                                baseEntityName = baseEntityName.substring(0, firstDot);
-                            }
-                            const entityName = baseEntityNames.get(baseEntityName);
-                            if (entityName !== undefined && entityName !== null) {
-                                const entity = entities.get(entityName)!;
-                                entity.operations.push(operation);
-                                found = true;
-                                break;
-                            }
-                        }
-
-                        if (calleeType === "FilterSet") {
-                            const baseEntityName = content.name.match(/(\w+)Filter$/)?.[1];
-                            if (baseEntityName !== undefined && baseEntityNames.has(baseEntityName)) {
-                                const entityName = baseEntityNames.get(baseEntityName);
-                                if (entityName !== null && entityName !== undefined) {
-                                    const entity = entities.get(entityName)!;
-                                    entity.operations.push(operation);
-                                    found = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    // Exact match of the entity name. This might cause false positives if
-                    // a non-entity callee happens to have the same name as an entity.
-                    {
-                        if (entities.has(calleeType)) {
-                            entities.get(calleeType)!.operations.push(operation);
-                            found = true;
-                            break;
+                            op.arguments = operation.arguments;
                         }
                     }
                 }
 
-
-                if (!found) {
-                    const calleeType = content.objectTypes[0];
-                    if (!unknowns.has(calleeType)) {
-                        unknowns.set(calleeType, {
-                            selection: undefined,
-                            name: calleeType,
-                            operations: [],
-                            note: "",
-                            isCustom: false,
-                        });
+                for (const ent of unknowns.values()) {
+                    for (const op of ent.operations) {
+                        if (operation.selection === op.selection && operation.arguments.length > 0) {
+                            if (op.arguments.length !== operation.arguments.length) {
+                                console.log(`Update arguments for unknown ${op.name} on ${operation.selection.filePath}:${operation.selection.fromLine}`);
+                            }
+                            op.arguments = operation.arguments;
+                        }
                     }
-
-                    unknowns.get(calleeType)!.operations.push({
-                        selection,
-                        name: content.object + "." + content.name,
-                        type: content.methodType,
-                        note: "",
-                        arguments: content.attributes.map((attr) => ({
-                            selection: {
-                                filePath: selection.filePath,
-                                fromLine: attr.startLine - 1,
-                                toLine: attr.endLine - 1,
-                                fromColumn: attr.startColumn,
-                                toColumn: attr.endColumn,
-                            },
-                            name: attr.name,
-                            note: "",
-                            isCustom: false,
-                        })),
-                        isCustom: false,
-                    });
                 }
+
+                //         // Find a recognized entity
+                //         let found = false;
+                //         for (const calleeType of content.objectTypes) {
+                //             if (calleeType === "django.db.transaction.atomic") {
+                //                 entities.get("[django.db.transaction.atomic]")!.operations.push(operation);
+                //                 found = true;
+                //                 break;
+                //             }
+
+                //             // Parse the entity name in the pattern "django.db.models.manager.Manager[ModelName]"
+                //             {
+                //                 const entityName = calleeType.match(/django.db.models.manager.Manager\[(.*)\]/)?.[1];
+                //                 if (entityName !== undefined && entities.has(entityName)) {
+                //                     const entity = entities.get(entityName)!;
+                //                     entity.operations.push(operation);
+                //                     found = true;
+                //                     break;
+                //                 }
+                //             }
+
+                //             // Parse the entity name in the pattern "django.db.models.manager.BaseManager[ModelName]"
+                //             {
+                //                 const entityName = calleeType.match(/django.db.models.manager.BaseManager\[(.*)\]/)?.[1];
+                //                 if (entityName !== undefined && entities.has(entityName)) {
+                //                     const entity = entities.get(entityName)!;
+                //                     entity.operations.push(operation);
+                //                     found = true;
+                //                     break;
+                //                 }
+                //             }
+
+                //             // Parse the entity names in the pattern "django.db.models.query._QuerySet[ModelName, ...]"
+                //             {
+                //                 const entityNamesStr = calleeType.match(/django.db.models.query._QuerySet\[(.*)\]/)?.[1];
+                //                 const entityNames = entityNamesStr === undefined ? [] : entityNamesStr.split(", ");
+                //                 for (const entityName of entityNames) {
+                //                     const entity = entities.get(entityName);
+                //                     if (entity !== undefined) {
+                //                         entity.operations.push(operation);
+                //                         found = true;
+                //                         break;
+                //                     }
+                //                 }
+                //                 if (found) {
+                //                     break;
+                //                 }
+                //             }
+
+                //             // Match with the unique base name of the entity
+                //             {
+                //                 const baseEntityName = calleeType.match(/(\w+)Manager$/)?.[1];
+                //                 if (baseEntityName !== undefined && baseEntityNames.has(baseEntityName)) {
+                //                     const entityName = baseEntityNames.get(baseEntityName);
+                //                     if (entityName !== null && entityName !== undefined) {
+                //                         const entity = entities.get(entityName)!;
+                //                         entity.operations.push(operation);
+                //                         found = true;
+                //                         break;
+                //                     }
+                //                 }
+
+                //                 if (["django.db.models.query._QuerySet[Any, Any]", "django.db.models.manager.Manager[Any]"].includes(calleeType)) {
+                //                     let baseEntityName = content.object;
+                //                     let firstDot = baseEntityName.indexOf(".");
+                //                     if (firstDot !== -1) {
+                //                         baseEntityName = baseEntityName.substring(0, firstDot);
+                //                     }
+                //                     const entityName = baseEntityNames.get(baseEntityName);
+                //                     if (entityName !== undefined && entityName !== null) {
+                //                         const entity = entities.get(entityName)!;
+                //                         entity.operations.push(operation);
+                //                         found = true;
+                //                         break;
+                //                     }
+                //                 }
+
+                //                 if (calleeType === "FilterSet") {
+                //                     const baseEntityName = content.name.match(/(\w+)Filter$/)?.[1];
+                //                     if (baseEntityName !== undefined && baseEntityNames.has(baseEntityName)) {
+                //                         const entityName = baseEntityNames.get(baseEntityName);
+                //                         if (entityName !== null && entityName !== undefined) {
+                //                             const entity = entities.get(entityName)!;
+                //                             entity.operations.push(operation);
+                //                             found = true;
+                //                             break;
+                //                         }
+                //                     }
+                //                 }
+                //             }
+
+                //             // Exact match of the entity name. This might cause false positives if
+                //             // a non-entity callee happens to have the same name as an entity.
+                //             {
+                //                 if (entities.has(calleeType)) {
+                //                     entities.get(calleeType)!.operations.push(operation);
+                //                     found = true;
+                //                     break;
+                //                 }
+                //             }
+                //         }
+
+
+                //         if (!found) {
+                //             const calleeType = content.objectTypes[0];
+                //             if (!unknowns.has(calleeType)) {
+                //                 unknowns.set(calleeType, {
+                //                     selection: undefined,
+                //                     name: calleeType,
+                //                     operations: [],
+                //                     note: "",
+                //                     isCustom: false,
+                //                 });
+                //             }
+
+                //             unknowns.get(calleeType)!.operations.push({
+                //                 selection,
+                //                 name: content.object + "." + content.name,
+                //                 type: content.methodType,
+                //                 note: "",
+                //                 arguments: content.attributes.map((attr) => ({
+                //                     selection: {
+                //                         filePath: selection.filePath,
+                //                         fromLine: attr.startLine - 1,
+                //                         toLine: attr.endLine - 1,
+                //                         fromColumn: attr.startColumn,
+                //                         toColumn: attr.endColumn,
+                //                     },
+                //                     name: attr.name,
+                //                     note: "",
+                //                     isCustom: false,
+                //                 })),
+                //                 isCustom: false,
+                //             });
+                //         }
             }
         }
     }

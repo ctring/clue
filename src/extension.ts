@@ -203,19 +203,44 @@ export function activate(context: vscode.ExtensionContext) {
     if (ok !== "Yes") {
       return;
     }
-
+    console.log("Reanalyzing the project");
     const resultPath = vscode.Uri.joinPath(
       vscode.Uri.joinPath(workspacePath, ".vscode"),
       `${analyzer!.getName()}-results.json`
     );
 
-    if (fs.existsSync(resultPath.fsPath)) {
-      await vscode.workspace.fs.delete(resultPath);
-    }
+    // if (fs.existsSync(resultPath.fsPath)) {
+    //   await vscode.workspace.fs.delete(resultPath);
+    // }
 
-    analyzeResult.clear();
+    // analyzeResult.clear();
 
-    runAnalyzer(analyzer!, workspacePath);
+    // runAnalyzer(analyzer!, workspacePath);
+    vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        cancellable: true,
+        title: `Analyzing ${analyzer.getName()} project`,
+      },
+      async (progress, cancel) => {
+
+        // Set up the cancellation
+        cancel.onCancellationRequested(() => {
+          analyzer.cancel();
+        });
+
+        // Do the analysis
+        let ok = await analyzer.analyze((msg) => progress.report({ message: msg }));
+        if (ok) {
+          // Save the result
+          await analyzeResult.saveToStorage();
+        } else {
+          vscode.window.showErrorMessage("Failed to analyze the project.");
+        }
+
+        analyzeResult.refreshViews();
+      }
+    );
   });
 
   vscode.commands.registerCommand("splinter.reload", async () => {
